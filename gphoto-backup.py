@@ -462,13 +462,83 @@ def fetch_albums_with_media_items(session):
     return albums, media_item_to_albums
 
 
+import os
+from datetime import datetime
+
+
+import os
+from datetime import datetime
+
+
+import os
+from datetime import datetime
+import shutil
+
+
+def organize_photos(download_dir, db_file):
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+
+    # Fetch all photos with their creation time and albums
+    cursor.execute(
+        """
+        SELECT df.filename, df.creation_time, GROUP_CONCAT(a.title, '|') as albums
+        FROM downloaded_files df
+        LEFT JOIN album_items ai ON df.file_id = ai.file_id
+        LEFT JOIN albums a ON ai.album_id = a.album_id
+        GROUP BY df.file_id
+    """
+    )
+
+    for filename, creation_time, albums in cursor.fetchall():
+        # Parse creation time
+        if creation_time:
+            date = datetime.fromisoformat(creation_time.split("+")[0])
+            date_folder = f"{date.year:04d}-{date.month:02d}"
+        else:
+            date_folder = "Unknown_Date"
+
+        # Ensure date folder exists
+        date_path = os.path.join(download_dir, date_folder)
+        os.makedirs(date_path, exist_ok=True)
+
+        # Check if file is in original location or already moved
+        old_path = os.path.join(download_dir, filename)
+        new_path = os.path.join(date_path, filename)
+
+        if os.path.exists(old_path):
+            # File is in original location, move it
+            shutil.move(old_path, new_path)
+            logger.info(f"Moved {filename} to {date_folder}")
+        elif not os.path.exists(new_path):
+            # File is not in original location or new location, log it
+            logger.warning(f"File not found: {filename}")
+            continue
+
+        # Handle albums
+        if albums:
+            for album in albums.split("|"):
+                album_path = os.path.join(download_dir, "Albums", album)
+                os.makedirs(album_path, exist_ok=True)
+                # Copy file to album folder if not already there
+                album_file_path = os.path.join(album_path, filename)
+                if not os.path.exists(album_file_path):
+                    shutil.copy2(new_path, album_file_path)
+                    logger.info(f"Copied {filename} to album {album}")
+
+    conn.close()
+
+    logger.info("Photos organization completed")
+
+
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=6)
+    start_date = datetime.now() - timedelta(days=12)
     end_date = datetime.now()  # Today
 
     try:
         sync_photos(download_dir, start_date, end_date, db_file)
+        organize_photos(download_dir, db_file)
     except Exception as e:
         logger.exception(f"An unexpected error occurred: {str(e)}")
