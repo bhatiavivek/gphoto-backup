@@ -120,6 +120,32 @@ def init_database(db_file):
         )
     """
     )
+
+    # Create albums table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS albums (
+            album_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            item_count INTEGER,
+            cover_photo_id TEXT
+        )
+    """
+    )
+
+    # Create album_items table for many-to-many relationship
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS album_items (
+            album_id TEXT,
+            file_id TEXT,
+            PRIMARY KEY (album_id, file_id),
+            FOREIGN KEY (album_id) REFERENCES albums (album_id),
+            FOREIGN KEY (file_id) REFERENCES downloaded_files (file_id)
+        )
+    """
+    )
+
     conn.commit()
     return conn
 
@@ -158,6 +184,37 @@ def download_file(url):
     except requests.exceptions.RequestException as e:
         logger.info(f"File download failed: {str(e)}")
         raise
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(
+        (requests.exceptions.RequestException, requests.exceptions.HTTPError)
+    ),
+    before_sleep=before_sleep_log(logger, logging.INFO),
+    after=after_log(logger, logging.INFO),
+)
+def fetch_albums(session):
+    url = "https://photoslibrary.googleapis.com/v1/albums"
+    albums = []
+    page_token = None
+
+    while True:
+        params = {"pageSize": 50}
+        if page_token:
+            params["pageToken"] = page_token
+
+        response = make_api_request(session, url, params=params)
+        data = response.json()
+
+        albums.extend(data.get("albums", []))
+        page_token = data.get("nextPageToken")
+
+        if not page_token:
+            break
+
+    return albums
 
 
 # Function to check if a file has been downloaded
@@ -234,34 +291,41 @@ def sync_photos(download_dir, start_date, end_date, db_file):
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
 
-    url = f"https://photoslibrary.googleapis.com/v1/mediaItems:search"
-
-    body = {
-        "pageSize": 100,
-        "filters": {
-            "dateFilter": {
-                "ranges": [
-                    {
-                        "startDate": {
-                            "year": start_date.year,
-                            "month": start_date.month,
-                            "day": start_date.day,
-                        },
-                        "endDate": {
-                            "year": end_date.year,
-                            "month": end_date.month,
-                            "day": end_date.day,
-                        },
-                    }
-                ]
-            }
-        },
-    }
-
     conn = init_database(db_file)
     cursor = conn.cursor()
 
     try:
+        # Fetch albums and create media item to albums mapping
+        albums, media_item_to_albums = fetch_albums_with_media_items(session)
+        for album in albums:
+            add_album(cursor, album)
+        conn.commit()
+        logger.info(f"Fetched and stored {len(albums)} albums")
+
+        # Existing photo sync code...
+        url = "https://photoslibrary.googleapis.com/v1/mediaItems:search"
+        body = {
+            "pageSize": 100,
+            "filters": {
+                "dateFilter": {
+                    "ranges": [
+                        {
+                            "startDate": {
+                                "year": start_date.year,
+                                "month": start_date.month,
+                                "day": start_date.day,
+                            },
+                            "endDate": {
+                                "year": end_date.year,
+                                "month": end_date.month,
+                                "day": end_date.day,
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+
         while not interrupted:
             try:
                 response = make_api_request(session, url, method="post", json=body)
@@ -272,6 +336,10 @@ def sync_photos(download_dir, start_date, end_date, db_file):
                     if interrupted:
                         break
                     download_photo(item, download_dir, cursor)
+
+                    # Add album associations
+                    for album_id in media_item_to_albums.get(item["id"], []):
+                        add_item_to_album(cursor, album_id, item["id"])
 
                 conn.commit()
 
@@ -291,12 +359,80 @@ def sync_photos(download_dir, start_date, end_date, db_file):
             logger.info("Sync completed successfully.")
 
 
-# Run the sync with date range
+def add_album(cursor, album):
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO albums (album_id, title, item_count, cover_photo_id)
+        VALUES (?, ?, ?, ?)
+    """,
+        (
+            album["id"],
+            album["title"],
+            album.get("mediaItemsCount"),
+            album.get("coverPhotoMediaItemId"),
+        ),
+    )
+
+
+def add_item_to_album(cursor, album_id, file_id):
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO album_items (album_id, file_id)
+        VALUES (?, ?)
+    """,
+        (album_id, file_id),
+    )
+
+
+def fetch_albums_with_media_items(session):
+    url = "https://photoslibrary.googleapis.com/v1/albums"
+    albums = []
+    media_item_to_albums = {}
+    page_token = None
+
+    while True:
+        params = {"pageSize": 50}
+        if page_token:
+            params["pageToken"] = page_token
+
+        response = make_api_request(session, url, params=params)
+        data = response.json()
+
+        for album in data.get("albums", []):
+            albums.append(album)
+
+            # Fetch media items for this album
+            media_items_url = (
+                f"https://photoslibrary.googleapis.com/v1/mediaItems:search"
+            )
+            media_items_body = {"albumId": album["id"], "pageSize": 100}
+
+            while True:
+                media_items_response = make_api_request(
+                    session, media_items_url, method="post", json=media_items_body
+                )
+                media_items_data = media_items_response.json()
+
+                for item in media_items_data.get("mediaItems", []):
+                    if item["id"] not in media_item_to_albums:
+                        media_item_to_albums[item["id"]] = []
+                    media_item_to_albums[item["id"]].append(album["id"])
+
+                if "nextPageToken" not in media_items_data:
+                    break
+                media_items_body["pageToken"] = media_items_data["nextPageToken"]
+
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+
+    return albums, media_item_to_albums
+
 
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=9)
+    start_date = datetime.now() - timedelta(days=12)
     end_date = datetime.now()  # Today
 
     try:
