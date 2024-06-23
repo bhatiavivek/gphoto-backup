@@ -7,7 +7,47 @@ import os
 from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
+import logging
+from logging.handlers import RotatingFileHandler
+import sys
 
+
+LOGGING_ENABLED = True  # Set this to False to disable logging
+LOG_FILE = "photo_sync.log"
+CONSOLE_LOG_LEVEL = logging.INFO
+FILE_LOG_LEVEL = logging.DEBUG
+
+
+def setup_logging(log_file, console_level, file_level):
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(console_level)
+    console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+
+    # File handler
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setLevel(file_level)
+    file_formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    return logger
+
+
+if LOGGING_ENABLED:
+    logger = setup_logging(LOG_FILE, CONSOLE_LOG_LEVEL, FILE_LOG_LEVEL)
+else:
+    logger = logging.getLogger()
+    logger.addHandler(logging.NullHandler())
 
 # Set up credentials
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
@@ -116,7 +156,7 @@ def download_photo(item, download_dir, cursor):
     # Check if the file has already been downloaded
     cursor.execute("SELECT 1 FROM downloaded_files WHERE file_id = ?", (file_id,))
     if cursor.fetchone():
-        print(f"Skipping already downloaded file: {filename}")
+        logger.info(f"Skipping already downloaded file: {filename}")
         return
 
     url = item["baseUrl"] + "=d"
@@ -124,12 +164,12 @@ def download_photo(item, download_dir, cursor):
     if response.status_code == 200:
         with open(file_path, "wb") as f:
             f.write(response.content)
-        print(f"Downloaded: {filename}")
+        logger.info(f"Downloaded: {filename}")
 
         # Update tracking data in SQLite with extended metadata
         add_downloaded_file(cursor, item, filename)
     else:
-        print(f"Failed to download: {filename}")
+        logger.info(f"Failed to download: {filename}")
 
 
 # Modified main sync function
@@ -168,7 +208,7 @@ def sync_photos(download_dir, start_date, end_date, db_file):
         while True:
             response = session.post(url, data=json.dumps(body))
             if response.status_code != 200:
-                print(f"Error: {response.status_code} - {response.text}")
+                logger.error(f"Error: {response.status_code} - {response.text}")
                 break
 
             data = response.json()
@@ -191,7 +231,7 @@ def sync_photos(download_dir, start_date, end_date, db_file):
 # Run the sync with date range
 download_dir = "/home/vivek/gphotos-backup"
 db_file = "photo_sync.db"
-start_date = datetime.now() - timedelta(days=7)
+start_date = datetime.now() - timedelta(days=9)
 end_date = datetime.now()  # Today
 
 sync_photos(download_dir, start_date, end_date, db_file)
