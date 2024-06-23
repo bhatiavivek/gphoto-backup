@@ -465,7 +465,7 @@ def fetch_albums_with_media_items(session):
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=5)
+    start_date = datetime.now() - timedelta(days=6)
     end_date = datetime.now()  # Today
 
     try:
