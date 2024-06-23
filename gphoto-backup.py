@@ -10,7 +10,16 @@ import sqlite3
 import logging
 from logging.handlers import RotatingFileHandler
 import sys
-
+import signal
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+    after_log,
+)
+import requests.exceptions
 
 LOGGING_ENABLED = True  # Set this to False to disable logging
 LOG_FILE = "photo_sync.log"
@@ -48,6 +57,21 @@ if LOGGING_ENABLED:
 else:
     logger = logging.getLogger()
     logger.addHandler(logging.NullHandler())
+
+# Global flag for interruption
+interrupted = False
+
+
+def signal_handler(signum, frame):
+    global interrupted
+    interrupted = True
+    logger.warning(
+        "Interruption signal received. Finishing current operation and exiting..."
+    )
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
 
 # Set up credentials
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
@@ -98,6 +122,42 @@ def init_database(db_file):
     )
     conn.commit()
     return conn
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(
+        (requests.exceptions.RequestException, requests.exceptions.HTTPError)
+    ),
+    before_sleep=before_sleep_log(logger, logging.INFO),
+    after=after_log(logger, logging.INFO),
+)
+def make_api_request(session, url, method="get", **kwargs):
+    try:
+        response = session.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response
+    except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+        logger.info(f"API request failed: {str(e)}")
+        raise
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
+    before_sleep=before_sleep_log(logger, logging.INFO),
+    after=after_log(logger, logging.INFO),
+)
+def download_file(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.content
+    except requests.exceptions.RequestException as e:
+        logger.info(f"File download failed: {str(e)}")
+        raise
 
 
 # Function to check if a file has been downloaded
@@ -153,26 +213,23 @@ def download_photo(item, download_dir, cursor):
     file_path = os.path.join(download_dir, filename)
     file_id = item["id"]
 
-    # Check if the file has already been downloaded
     cursor.execute("SELECT 1 FROM downloaded_files WHERE file_id = ?", (file_id,))
     if cursor.fetchone():
         logger.info(f"Skipping already downloaded file: {filename}")
         return
 
     url = item["baseUrl"] + "=d"
-    response = requests.get(url)
-    if response.status_code == 200:
+    logger.debug(f"Attempting to download {filename} from URL: {url}")
+    try:
+        content = download_file(url)
         with open(file_path, "wb") as f:
-            f.write(response.content)
+            f.write(content)
         logger.info(f"Downloaded: {filename}")
-
-        # Update tracking data in SQLite with extended metadata
         add_downloaded_file(cursor, item, filename)
-    else:
-        logger.info(f"Failed to download: {filename}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to download {filename} after retries: {str(e)}")
 
 
-# Modified main sync function
 def sync_photos(download_dir, start_date, end_date, db_file):
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
@@ -205,33 +262,44 @@ def sync_photos(download_dir, start_date, end_date, db_file):
     cursor = conn.cursor()
 
     try:
-        while True:
-            response = session.post(url, data=json.dumps(body))
-            if response.status_code != 200:
-                logger.error(f"Error: {response.status_code} - {response.text}")
-                break
+        while not interrupted:
+            try:
+                response = make_api_request(session, url, method="post", json=body)
+                data = response.json()
+                items = data.get("mediaItems", [])
 
-            data = response.json()
-            items = data.get("mediaItems", [])
+                for item in items:
+                    if interrupted:
+                        break
+                    download_photo(item, download_dir, cursor)
 
-            for item in items:
-                download_photo(item, download_dir, cursor)
+                conn.commit()
 
-            # Commit changes after each batch
-            conn.commit()
-
-            if "nextPageToken" in data:
-                body["pageToken"] = data["nextPageToken"]
-            else:
-                break
+                if "nextPageToken" in data:
+                    body["pageToken"] = data["nextPageToken"]
+                else:
+                    break
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Error in API request: {str(e)}")
+                if "pageToken" in body:
+                    del body["pageToken"]  # Reset page token on error
     finally:
         conn.close()
+        if interrupted:
+            logger.info("Script interrupted. Exiting gracefully.")
+        else:
+            logger.info("Sync completed successfully.")
 
 
 # Run the sync with date range
-download_dir = "/home/vivek/gphotos-backup"
-db_file = "photo_sync.db"
-start_date = datetime.now() - timedelta(days=9)
-end_date = datetime.now()  # Today
 
-sync_photos(download_dir, start_date, end_date, db_file)
+if __name__ == "__main__":
+    download_dir = "/home/vivek/gphotos-backup"
+    db_file = "photo_sync.db"
+    start_date = datetime.now() - timedelta(days=9)
+    end_date = datetime.now()  # Today
+
+    try:
+        sync_photos(download_dir, start_date, end_date, db_file)
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred: {str(e)}")

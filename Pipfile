@@ -9,6 +9,7 @@ google-api-python-client = "*"
 requests = "*"
 pytz = "*"
 harlequin = "*"
+tenacity = "*"
 
 [dev-packages]
 
