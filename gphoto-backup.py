@@ -389,42 +389,75 @@ def fetch_albums_with_media_items(session):
     albums = []
     media_item_to_albums = {}
     page_token = None
+    album_count = 0
+    total_media_items = 0
+
+    logger.info("Starting to fetch albums and their media items")
 
     while True:
         params = {"pageSize": 50}
         if page_token:
             params["pageToken"] = page_token
 
+        logger.debug(f"Fetching albums page with params: {params}")
         response = make_api_request(session, url, params=params)
         data = response.json()
 
-        for album in data.get("albums", []):
+        page_albums = data.get("albums", [])
+        album_count += len(page_albums)
+        logger.info(f"Fetched {len(page_albums)} albums (Total: {album_count})")
+
+        for album in page_albums:
             albums.append(album)
+            logger.debug(f"Processing album: {album['title']} (ID: {album['id']})")
 
             # Fetch media items for this album
             media_items_url = (
-                f"https://photoslibrary.googleapis.com/v1/mediaItems:search"
+                "https://photoslibrary.googleapis.com/v1/mediaItems:search"
             )
             media_items_body = {"albumId": album["id"], "pageSize": 100}
+            media_items_page_token = None
+            album_media_items_count = 0
 
             while True:
+                if media_items_page_token:
+                    media_items_body["pageToken"] = media_items_page_token
+
+                logger.debug(
+                    f"Fetching media items for album {album['title']} with body: {media_items_body}"
+                )
                 media_items_response = make_api_request(
                     session, media_items_url, method="post", json=media_items_body
                 )
                 media_items_data = media_items_response.json()
 
-                for item in media_items_data.get("mediaItems", []):
+                page_media_items = media_items_data.get("mediaItems", [])
+                album_media_items_count += len(page_media_items)
+                total_media_items += len(page_media_items)
+
+                for item in page_media_items:
                     if item["id"] not in media_item_to_albums:
                         media_item_to_albums[item["id"]] = []
                     media_item_to_albums[item["id"]].append(album["id"])
 
-                if "nextPageToken" not in media_items_data:
+                media_items_page_token = media_items_data.get("nextPageToken")
+                if not media_items_page_token:
                     break
-                media_items_body["pageToken"] = media_items_data["nextPageToken"]
+
+            logger.info(
+                f"Fetched {album_media_items_count} media items for album: {album['title']}"
+            )
 
         page_token = data.get("nextPageToken")
         if not page_token:
             break
+
+    logger.info(
+        f"Finished fetching albums and media items. Total albums: {album_count}, Total media items: {total_media_items}"
+    )
+    logger.info(
+        f"Number of unique media items across all albums: {len(media_item_to_albums)}"
+    )
 
     return albums, media_item_to_albums
 
@@ -432,7 +465,7 @@ def fetch_albums_with_media_items(session):
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=12)
+    start_date = datetime.now() - timedelta(days=5)
     end_date = datetime.now()  # Today
 
     try:
