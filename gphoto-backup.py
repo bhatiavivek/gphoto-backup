@@ -4,7 +4,7 @@ from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
 import requests
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 
@@ -40,7 +40,19 @@ def init_database(db_file):
         CREATE TABLE IF NOT EXISTS downloaded_files (
             file_id TEXT PRIMARY KEY,
             filename TEXT NOT NULL,
-            download_date TEXT NOT NULL
+            download_date TEXT NOT NULL,
+            creation_time TEXT,
+            width INTEGER,
+            height INTEGER,
+            photo_type TEXT,
+            camera_make TEXT,
+            camera_model TEXT,
+            focal_length FLOAT,
+            aperture_fnumber FLOAT,
+            iso_equivalent INTEGER,
+            exposure_time TEXT,
+            lat FLOAT,
+            long FLOAT
         )
     """
     )
@@ -55,13 +67,44 @@ def is_file_downloaded(cursor, file_id):
 
 
 # Function to add a downloaded file to the database
-def add_downloaded_file(cursor, file_id, filename):
+def add_downloaded_file(cursor, item, filename):
+    file_id = item["id"]
+    metadata = item.get("mediaMetadata", {})
+
+    creation_time = metadata.get("creationTime")
+    if creation_time:
+        # Parse the ISO format string to a datetime object
+        creation_time = datetime.fromisoformat(creation_time.replace("Z", "+00:00"))
+        # Ensure it's in UTC
+        creation_time = creation_time.astimezone(timezone.utc)
+
+    photo = metadata.get("photo", {})
+
     cursor.execute(
         """
-        INSERT OR REPLACE INTO downloaded_files (file_id, filename, download_date)
-        VALUES (?, ?, ?)
+        INSERT OR REPLACE INTO downloaded_files 
+        (file_id, filename, download_date, creation_time, width, height, 
+        photo_type, camera_make, camera_model, focal_length, aperture_fnumber, 
+        iso_equivalent, exposure_time, lat, long)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
-        (file_id, filename, datetime.now().isoformat()),
+        (
+            file_id,
+            filename,
+            datetime.now(timezone.utc).isoformat(),
+            creation_time.isoformat() if creation_time else None,
+            metadata.get("width"),
+            metadata.get("height"),
+            metadata.get("mimeType"),
+            photo.get("cameraMake"),
+            photo.get("cameraModel"),
+            photo.get("focalLength"),
+            photo.get("apertureFNumber"),
+            photo.get("isoEquivalent"),
+            photo.get("exposureTime"),
+            item.get("geoData", {}).get("latitude"),
+            item.get("geoData", {}).get("longitude"),
+        ),
     )
 
 
@@ -71,7 +114,8 @@ def download_photo(item, download_dir, cursor):
     file_id = item["id"]
 
     # Check if the file has already been downloaded
-    if is_file_downloaded(cursor, file_id):
+    cursor.execute("SELECT 1 FROM downloaded_files WHERE file_id = ?", (file_id,))
+    if cursor.fetchone():
         print(f"Skipping already downloaded file: {filename}")
         return
 
@@ -82,8 +126,8 @@ def download_photo(item, download_dir, cursor):
             f.write(response.content)
         print(f"Downloaded: {filename}")
 
-        # Update tracking data in SQLite
-        add_downloaded_file(cursor, file_id, filename)
+        # Update tracking data in SQLite with extended metadata
+        add_downloaded_file(cursor, item, filename)
     else:
         print(f"Failed to download: {filename}")
 
@@ -147,7 +191,7 @@ def sync_photos(download_dir, start_date, end_date, db_file):
 # Run the sync with date range
 download_dir = "/home/vivek/gphotos-backup"
 db_file = "photo_sync.db"
-start_date = datetime.now() - timedelta(days=3)
+start_date = datetime.now() - timedelta(days=7)
 end_date = datetime.now()  # Today
 
 sync_photos(download_dir, start_date, end_date, db_file)
