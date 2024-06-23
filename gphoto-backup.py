@@ -475,6 +475,11 @@ from datetime import datetime
 import shutil
 
 
+import os
+from datetime import datetime
+import shutil
+
+
 def organize_photos(download_dir, db_file):
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
@@ -520,11 +525,11 @@ def organize_photos(download_dir, db_file):
             for album in albums.split("|"):
                 album_path = os.path.join(download_dir, "Albums", album)
                 os.makedirs(album_path, exist_ok=True)
-                # Copy file to album folder if not already there
+                # Create symlink in album folder if not already there
                 album_file_path = os.path.join(album_path, filename)
                 if not os.path.exists(album_file_path):
-                    shutil.copy2(new_path, album_file_path)
-                    logger.info(f"Copied {filename} to album {album}")
+                    os.symlink(new_path, album_file_path)
+                    logger.info(f"Created symlink for {filename} in album {album}")
 
     conn.close()
 
@@ -534,7 +539,7 @@ def organize_photos(download_dir, db_file):
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=12)
+    start_date = datetime.now() - timedelta(days=15)
     end_date = datetime.now()  # Today
 
     try:
