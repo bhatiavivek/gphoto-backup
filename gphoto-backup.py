@@ -6,6 +6,8 @@ import requests
 import os
 from datetime import datetime, timedelta
 import json
+import sqlite3
+import pytz
 
 # Set up credentials
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
@@ -95,7 +97,7 @@ def sync_photos(download_dir, start_date, end_date):
 
 # Run the sync with date range
 download_dir = "/home/vivek/gphotos-backup"
-start_date = datetime.now() - timedelta(days=7)  # 7 days ago
+start_date = datetime.now() - timedelta(days=3)  # 7 days ago
 end_date = datetime.now()  # Today
 
 sync_photos(download_dir, start_date, end_date)
