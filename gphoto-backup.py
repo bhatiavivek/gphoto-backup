@@ -6,6 +6,7 @@ import requests
 import os
 from datetime import datetime, timedelta
 import json
+import sqlite3
 
 
 # Set up credentials
@@ -31,27 +32,46 @@ def get_credentials():
     return creds
 
 
-# Function to load the tracking data
-def load_tracking_data(tracking_file):
-    if os.path.exists(tracking_file):
-        with open(tracking_file, "r") as f:
-            return json.load(f)
-    return {}
+def init_database(db_file):
+    conn = sqlite3.connect(db_file)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS downloaded_files (
+            file_id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            download_date TEXT NOT NULL
+        )
+    """
+    )
+    conn.commit()
+    return conn
 
 
-# Function to save the tracking data
-def save_tracking_data(tracking_file, data):
-    with open(tracking_file, "w") as f:
-        json.dump(data, f)
+# Function to check if a file has been downloaded
+def is_file_downloaded(cursor, file_id):
+    cursor.execute("SELECT 1 FROM downloaded_files WHERE file_id = ?", (file_id,))
+    return cursor.fetchone() is not None
 
 
-def download_photo(item, download_dir, tracking_data):
+# Function to add a downloaded file to the database
+def add_downloaded_file(cursor, file_id, filename):
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO downloaded_files (file_id, filename, download_date)
+        VALUES (?, ?, ?)
+    """,
+        (file_id, filename, datetime.now().isoformat()),
+    )
+
+
+def download_photo(item, download_dir, cursor):
     filename = f"{item['filename']}"
     file_path = os.path.join(download_dir, filename)
     file_id = item["id"]
 
     # Check if the file has already been downloaded
-    if file_id in tracking_data:
+    if is_file_downloaded(cursor, file_id):
         print(f"Skipping already downloaded file: {filename}")
         return
 
@@ -62,17 +82,14 @@ def download_photo(item, download_dir, tracking_data):
             f.write(response.content)
         print(f"Downloaded: {filename}")
 
-        # Update tracking data
-        tracking_data[file_id] = {
-            "filename": filename,
-            "download_date": datetime.now().isoformat(),
-        }
+        # Update tracking data in SQLite
+        add_downloaded_file(cursor, file_id, filename)
     else:
         print(f"Failed to download: {filename}")
 
 
 # Modified main sync function
-def sync_photos(download_dir, start_date, end_date, tracking_file):
+def sync_photos(download_dir, start_date, end_date, db_file):
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
 
@@ -100,33 +117,37 @@ def sync_photos(download_dir, start_date, end_date, tracking_file):
         },
     }
 
-    tracking_data = load_tracking_data(tracking_file)
+    conn = init_database(db_file)
+    cursor = conn.cursor()
 
-    while True:
-        response = session.post(url, data=json.dumps(body))
-        if response.status_code != 200:
-            print(f"Error: {response.status_code} - {response.text}")
-            break
+    try:
+        while True:
+            response = session.post(url, data=json.dumps(body))
+            if response.status_code != 200:
+                print(f"Error: {response.status_code} - {response.text}")
+                break
 
-        data = response.json()
-        items = data.get("mediaItems", [])
+            data = response.json()
+            items = data.get("mediaItems", [])
 
-        for item in items:
-            download_photo(item, download_dir, tracking_data)
+            for item in items:
+                download_photo(item, download_dir, cursor)
 
-        # Save tracking data after each batch
-        save_tracking_data(tracking_file, tracking_data)
+            # Commit changes after each batch
+            conn.commit()
 
-        if "nextPageToken" in data:
-            body["pageToken"] = data["nextPageToken"]
-        else:
-            break
+            if "nextPageToken" in data:
+                body["pageToken"] = data["nextPageToken"]
+            else:
+                break
+    finally:
+        conn.close()
 
 
 # Run the sync with date range
 download_dir = "/home/vivek/gphotos-backup"
-tracking_file = "downloaded_files.json"
-start_date = datetime.now() - timedelta(days=5)
+db_file = "photo_sync.db"
+start_date = datetime.now() - timedelta(days=3)
 end_date = datetime.now()  # Today
 
-sync_photos(download_dir, start_date, end_date, tracking_file)
+sync_photos(download_dir, start_date, end_date, db_file)
