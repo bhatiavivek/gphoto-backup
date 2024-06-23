@@ -6,8 +6,7 @@ import requests
 import os
 from datetime import datetime, timedelta
 import json
-import sqlite3
-import pytz
+
 
 # Set up credentials
 SCOPES = ["https://www.googleapis.com/auth/photoslibrary.readonly"]
@@ -32,28 +31,52 @@ def get_credentials():
     return creds
 
 
-# Function to download photos
-def download_photo(item, download_dir):
+# Function to load the tracking data
+def load_tracking_data(tracking_file):
+    if os.path.exists(tracking_file):
+        with open(tracking_file, "r") as f:
+            return json.load(f)
+    return {}
+
+
+# Function to save the tracking data
+def save_tracking_data(tracking_file, data):
+    with open(tracking_file, "w") as f:
+        json.dump(data, f)
+
+
+def download_photo(item, download_dir, tracking_data):
     filename = f"{item['filename']}"
     file_path = os.path.join(download_dir, filename)
+    file_id = item["id"]
 
-    if not os.path.exists(file_path):
-        url = item["baseUrl"] + "=d"
-        response = requests.get(url)
-        if response.status_code == 200:
-            with open(file_path, "wb") as f:
-                f.write(response.content)
-            print(f"Downloaded: {filename}")
-        else:
-            print(f"Failed to download: {filename}")
+    # Check if the file has already been downloaded
+    if file_id in tracking_data:
+        print(f"Skipping already downloaded file: {filename}")
+        return
+
+    url = item["baseUrl"] + "=d"
+    response = requests.get(url)
+    if response.status_code == 200:
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+        print(f"Downloaded: {filename}")
+
+        # Update tracking data
+        tracking_data[file_id] = {
+            "filename": filename,
+            "download_date": datetime.now().isoformat(),
+        }
+    else:
+        print(f"Failed to download: {filename}")
 
 
-# Main sync function with date range
-def sync_photos(download_dir, start_date, end_date):
+# Modified main sync function
+def sync_photos(download_dir, start_date, end_date, tracking_file):
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
 
-    url = f"https://photoslibrary.googleapis.com/{API_VERSION}/mediaItems:search"
+    url = f"https://photoslibrary.googleapis.com/v1/mediaItems:search"
 
     body = {
         "pageSize": 100,
@@ -77,6 +100,8 @@ def sync_photos(download_dir, start_date, end_date):
         },
     }
 
+    tracking_data = load_tracking_data(tracking_file)
+
     while True:
         response = session.post(url, data=json.dumps(body))
         if response.status_code != 200:
@@ -87,7 +112,10 @@ def sync_photos(download_dir, start_date, end_date):
         items = data.get("mediaItems", [])
 
         for item in items:
-            download_photo(item, download_dir)
+            download_photo(item, download_dir, tracking_data)
+
+        # Save tracking data after each batch
+        save_tracking_data(tracking_file, tracking_data)
 
         if "nextPageToken" in data:
             body["pageToken"] = data["nextPageToken"]
@@ -97,7 +125,8 @@ def sync_photos(download_dir, start_date, end_date):
 
 # Run the sync with date range
 download_dir = "/home/vivek/gphotos-backup"
-start_date = datetime.now() - timedelta(days=3)  # 7 days ago
+tracking_file = "downloaded_files.json"
+start_date = datetime.now() - timedelta(days=5)
 end_date = datetime.now()  # Today
 
-sync_photos(download_dir, start_date, end_date)
+sync_photos(download_dir, start_date, end_date, tracking_file)

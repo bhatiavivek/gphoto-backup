@@ -8,6 +8,7 @@ staticfiles/
 temp*.py
 *secret*.json
 *token*
+downloaded_files.json
 
 
 # Byte-compiled / optimized / DLL files
