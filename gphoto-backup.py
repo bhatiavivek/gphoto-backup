@@ -398,6 +398,28 @@ def add_item_to_album(cursor, album_id, file_id):
 
 
 def fetch_albums_with_media_items(session):
+    """
+    Fetches all albums and their associated media items from Google Photos.
+
+    This function performs two main operations:
+    1. Retrieves all albums from the user's Google Photos account.
+    2. For each album, fetches all media items contained within it.
+
+    The function handles pagination for both album and media item retrieval,
+    ensuring all data is collected even if it spans multiple pages.
+
+    Args:
+    session (google.auth.transport.requests.AuthorizedSession): An authorized session for making API requests.
+
+    Returns:
+    tuple: A tuple containing two elements:
+        - list: All fetched albums, each as a dictionary of album metadata.
+        - dict: A mapping of media item IDs to lists of album IDs they belong to.
+
+    Note:
+    This function may take a considerable amount of time to execute for accounts
+    with many albums or media items. It logs its progress for monitoring.
+    """
     url = "https://photoslibrary.googleapis.com/v1/albums"
     albums = []
     media_item_to_albums = {}
@@ -408,6 +430,7 @@ def fetch_albums_with_media_items(session):
     logger.info("Starting to fetch albums and their media items")
 
     while True:
+        # Set up parameters for album retrieval, including pagination
         params = {"pageSize": 50}
         if page_token:
             params["pageToken"] = page_token
@@ -416,6 +439,7 @@ def fetch_albums_with_media_items(session):
         response = make_api_request(session, url, params=params)
         data = response.json()
 
+        # Process the albums from the current page
         page_albums = data.get("albums", [])
         album_count += len(page_albums)
         logger.info(f"Fetched {len(page_albums)} albums (Total: {album_count})")
@@ -424,7 +448,7 @@ def fetch_albums_with_media_items(session):
             albums.append(album)
             logger.debug(f"Processing album: {album['title']} (ID: {album['id']})")
 
-            # Fetch media items for this album
+            # Fetch media items for the current album
             media_items_url = (
                 "https://photoslibrary.googleapis.com/v1/mediaItems:search"
             )
@@ -432,6 +456,7 @@ def fetch_albums_with_media_items(session):
             media_items_page_token = None
             album_media_items_count = 0
 
+            # Paginate through all media items in the album
             while True:
                 if media_items_page_token:
                     media_items_body["pageToken"] = media_items_page_token
@@ -444,15 +469,18 @@ def fetch_albums_with_media_items(session):
                 )
                 media_items_data = media_items_response.json()
 
+                # Process media items from the current page
                 page_media_items = media_items_data.get("mediaItems", [])
                 album_media_items_count += len(page_media_items)
                 total_media_items += len(page_media_items)
 
+                # Map each media item to its album
                 for item in page_media_items:
                     if item["id"] not in media_item_to_albums:
                         media_item_to_albums[item["id"]] = []
                     media_item_to_albums[item["id"]].append(album["id"])
 
+                # Check for more pages of media items
                 media_items_page_token = media_items_data.get("nextPageToken")
                 if not media_items_page_token:
                     break
@@ -461,10 +489,12 @@ def fetch_albums_with_media_items(session):
                 f"Fetched {album_media_items_count} media items for album: {album['title']}"
             )
 
+        # Check for more pages of albums
         page_token = data.get("nextPageToken")
         if not page_token:
             break
 
+    # Log summary of fetched data
     logger.info(
         f"Finished fetching albums and media items. Total albums: {album_count}, Total media items: {total_media_items}"
     )
