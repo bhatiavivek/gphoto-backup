@@ -539,8 +539,10 @@ def organize_photos(download_dir, db_file):
 if __name__ == "__main__":
     download_dir = "/home/vivek/gphotos-backup"
     db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=15)
+    start_date = datetime.now() - timedelta(days=365)
     end_date = datetime.now()  # Today
+    start_date = datetime(2022, 1, 1)
+    end_date = datetime(2023, 6, 27)
 
     try:
         sync_photos(download_dir, start_date, end_date, db_file)
