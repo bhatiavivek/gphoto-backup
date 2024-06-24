@@ -21,6 +21,7 @@ Before you can use this script, you need to:
 4. Enable the Photos Library API for your project
 5. Create credentials (OAuth client ID) for a desktop application
 6. Download the client configuration and save it as `client_secret.json` in the same directory as the script
+7. **For the time being, this is Linux-only. It should work on the Mac although it hasn't been tested. Windows support is ccoming, likely before the end of June 2024**
 
 ## Installation
 
@@ -70,4 +71,3 @@ This project is licensed under the [MIT License](LICENSE).
 ## Disclaimer
 
 This script is not officially associated with Google. Use it at your own risk. Always ensure you have multiple backups of important data.
-```
