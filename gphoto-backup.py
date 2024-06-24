@@ -302,20 +302,45 @@ def download_photo(item, download_dir, cursor):
 
 
 def sync_photos(download_dir, start_date, end_date, db_file):
+    """
+    Synchronizes photos from Google Photos to a local directory within a specified date range.
+
+    This function performs the following operations:
+    1. Fetches and stores all albums and their media items.
+    2. Retrieves media items within the specified date range.
+    3. Downloads each media item and stores it locally.
+    4. Associates downloaded items with their respective albums in the database.
+
+    The function handles pagination and can be interrupted safely.
+
+    Args:
+    download_dir (str): Path to the directory where photos will be downloaded.
+    start_date (datetime): The start date of the range to sync.
+    end_date (datetime): The end date of the range to sync.
+    db_file (str): Path to the SQLite database file for storing metadata.
+
+    Global Variables Used:
+    interrupted (bool): Flag to signal if the sync process should be interrupted.
+
+    Note:
+    This function may take a considerable amount of time to execute depending on the
+    number of photos in the specified date range and the network speed.
+    """
+    # Initialize credentials and database connection
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
-
     conn = init_database(db_file)
     cursor = conn.cursor()
 
     try:
-        # Fetch albums and create media item to albums mapping
+        # Fetch and store albums and their media items
         albums, media_item_to_albums = fetch_albums_with_media_items(session)
         for album in albums:
             add_album(cursor, album)
         conn.commit()
         logger.info(f"Fetched and stored {len(albums)} albums")
 
+        # Set up the API request for fetching media items
         url = "https://photoslibrary.googleapis.com/v1/mediaItems:search"
         body = {
             "pageSize": 100,
@@ -339,32 +364,39 @@ def sync_photos(download_dir, start_date, end_date, db_file):
             },
         }
 
+        # Main loop for fetching and downloading media items
         while not interrupted:
             try:
+                # Make API request to get media items
                 response = make_api_request(session, url, method="post", json=body)
                 data = response.json()
                 items = data.get("mediaItems", [])
 
+                # Process each media item
                 for item in items:
                     if interrupted:
                         break
+                    # Download the photo and store it locally
                     download_photo(item, download_dir, cursor)
-
-                    # Add album associations
+                    # Associate the item with its albums in the database
                     for album_id in media_item_to_albums.get(item["id"], []):
                         add_item_to_album(cursor, album_id, item["id"])
 
                 conn.commit()
 
+                # Check for more pages of results
                 if "nextPageToken" in data:
                     body["pageToken"] = data["nextPageToken"]
                 else:
-                    break
+                    break  # No more pages, exit the loop
+
             except requests.exceptions.RequestException as e:
                 logger.error(f"Error in API request: {str(e)}")
                 if "pageToken" in body:
                     del body["pageToken"]  # Reset page token on error
+
     finally:
+        # Ensure database connection is closed
         conn.close()
         if interrupted:
             logger.info("Script interrupted. Exiting gracefully.")
