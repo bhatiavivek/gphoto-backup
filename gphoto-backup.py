@@ -476,6 +476,44 @@ def fetch_albums_with_media_items(session):
 
 
 def organize_photos(download_dir, db_file):
+    """
+    Organizes downloaded photos into a structured folder hierarchy and creates album symlinks.
+
+    This function:
+    1. Moves photos from the download directory into year-month folders.
+    2. Creates symlinks in album folders pointing to the organized photos.
+
+    Folder structure created:
+
+    download_dir/
+    ├── YYYY-MM/
+    │   ├── photo1.jpg
+    │   ├── photo2.jpg
+    │   └── ...
+    ├── YYYY-MM/
+    │   ├── photo3.jpg
+    │   ├── photo4.jpg
+    │   └── ...
+    └── Albums/
+        ├── Album1/
+        │   ├── photo1.jpg -> ../../YYYY-MM/photo1.jpg
+        │   └── photo2.jpg -> ../../YYYY-MM/photo2.jpg
+        └── Album2/
+            ├── photo3.jpg -> ../../YYYY-MM/photo3.jpg
+            └── photo4.jpg -> ../../YYYY-MM/photo4.jpg
+
+    Args:
+    download_dir (str): Path to the directory where photos are initially downloaded.
+    db_file (str): Path to the SQLite database file containing photo metadata.
+
+    The function doesn't return anything but logs its actions using the logger.
+
+    Note:
+    - Photos not associated with any album will only exist in the YYYY-MM folders.
+    - The function skips WhatsApp images (matching pattern IMG-*-WA*.jpg).
+    - If a photo has already been organized, it won't be moved again.
+    """
+
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
 
