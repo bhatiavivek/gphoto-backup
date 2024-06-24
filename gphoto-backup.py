@@ -1,3 +1,19 @@
+"""
+Google Photos Sync and Organize Script
+
+This script synchronizes photos from Google Photos to a local directory and organizes them.
+It uses the Google Photos API to fetch photos and albums, downloads them, and organizes
+them into date-based folders and album-based symlinks.
+
+Requirements:
+- Google Cloud project with Photos API enabled
+- OAuth 2.0 credentials (client_secret.json)
+- Required Python packages (see imports)
+
+Usage:
+python script_name.py
+"""
+
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -22,7 +38,7 @@ from tenacity import (
 import requests.exceptions
 import shutil
 
-LOGGING_ENABLED = True  # Set this to False to disable logging
+LOGGING_ENABLED = True
 LOG_FILE = "photo_sync.log"
 CONSOLE_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
@@ -122,7 +138,6 @@ def init_database(db_file):
     """
     )
 
-    # Create albums table
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS albums (
@@ -134,7 +149,6 @@ def init_database(db_file):
     """
     )
 
-    # Create album_items table for many-to-many relationship
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS album_items (
@@ -218,7 +232,6 @@ def fetch_albums(session):
     return albums
 
 
-# Function to check if a file has been downloaded
 def is_file_downloaded(cursor, file_id):
     cursor.execute("SELECT 1 FROM downloaded_files WHERE file_id = ?", (file_id,))
     return cursor.fetchone() is not None
@@ -303,7 +316,6 @@ def sync_photos(download_dir, start_date, end_date, db_file):
         conn.commit()
         logger.info(f"Fetched and stored {len(albums)} albums")
 
-        # Existing photo sync code...
         url = "https://photoslibrary.googleapis.com/v1/mediaItems:search"
         body = {
             "pageSize": 100,
@@ -467,7 +479,7 @@ def organize_photos(download_dir, db_file):
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
 
-    # Fetch all photos with their creation time and albums
+    # Fetch all photos with their creation time and albums from the local db
     cursor.execute(
         """
         SELECT df.filename, df.creation_time, GROUP_CONCAT(a.title, '|') as albums
