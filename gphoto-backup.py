@@ -20,6 +20,7 @@ from tenacity import (
     after_log,
 )
 import requests.exceptions
+import shutil
 
 LOGGING_ENABLED = True  # Set this to False to disable logging
 LOG_FILE = "photo_sync.log"
@@ -462,24 +463,6 @@ def fetch_albums_with_media_items(session):
     return albums, media_item_to_albums
 
 
-import os
-from datetime import datetime
-
-
-import os
-from datetime import datetime
-
-
-import os
-from datetime import datetime
-import shutil
-
-
-import os
-from datetime import datetime
-import shutil
-
-
 def organize_photos(download_dir, db_file):
     conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
@@ -541,8 +524,8 @@ if __name__ == "__main__":
     db_file = "photo_sync.db"
     start_date = datetime.now() - timedelta(days=365)
     end_date = datetime.now()  # Today
-    start_date = datetime(2022, 1, 1)
-    end_date = datetime(2023, 6, 27)
+    start_date = datetime(2021, 12, 1)
+    end_date = datetime(2022, 1, 1)
 
     try:
         sync_photos(download_dir, start_date, end_date, db_file)
