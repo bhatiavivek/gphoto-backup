@@ -37,57 +37,133 @@ from tenacity import (
 )
 import requests.exceptions
 import shutil
+import click
 
-LOGGING_ENABLED = True
-LOG_FILE = "photo_sync.log"
-CONSOLE_LOG_LEVEL = logging.INFO
-FILE_LOG_LEVEL = logging.DEBUG
+# Global variables
+interrupted = False
+logger = None  # Global logger object
 
 
-def setup_logging(log_file, console_level, file_level):
+def signal_handler(signum, frame):
+    global interrupted, logger
+    interrupted = True
+    if logger:
+        logger.warning(
+            "Interruption signal received. Finishing current operation and exiting..."
+        )
+    else:
+        print(
+            "Interruption signal received. Finishing current operation and exiting..."
+        )
+
+
+# Set up signal handler
+signal.signal(signal.SIGINT, signal_handler)
+
+
+def setup_logging(log_console, log_file, log_level):
+    """
+    Set up logging based on CLI options.
+
+    Args:
+        log_console (bool): Whether to enable console logging.
+        log_file (bool): Whether to enable file logging.
+        log_level (str): Logging level.
+
+    Returns:
+        logging.Logger: Configured logger object.
+    """
+    global logger
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.DEBUG)  # Set to lowest level, handlers will filter
 
-    # Console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
-    console_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    console_handler.setFormatter(console_formatter)
-    logger.addHandler(console_handler)
+    log_format = "%(asctime)s - %(levelname)s - %(message)s"
+    formatter = logging.Formatter(log_format)
 
-    # File handler
-    file_handler = RotatingFileHandler(
-        log_file, maxBytes=10 * 1024 * 1024, backupCount=5
-    )
-    file_handler.setLevel(file_level)
-    file_formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
-    )
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler)
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    if log_console:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(log_level)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+    if log_file:
+        file_handler = RotatingFileHandler(
+            "photo_sync.log", maxBytes=10 * 1024 * 1024, backupCount=5
+        )
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+    # If no logging is enabled, add a NullHandler to suppress warnings
+    if not log_console and not log_file:
+        logger.addHandler(logging.NullHandler())
 
     return logger
 
 
-if LOGGING_ENABLED:
-    logger = setup_logging(LOG_FILE, CONSOLE_LOG_LEVEL, FILE_LOG_LEVEL)
-else:
-    logger = logging.getLogger()
-    logger.addHandler(logging.NullHandler())
+@click.command()
+@click.option(
+    "--backup-dir",
+    type=click.Path(file_okay=False, dir_okay=True, writable=True),
+    default=lambda: os.path.join(os.path.expanduser("~"), "gphoto-backup"),
+    help="Directory to store downloaded photos. Default is ~/gphoto-backup/",
+)
+@click.option(
+    "--start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default="2010-01-01",
+    help="Start date for photo sync (YYYY-MM-DD). Default is 2010-01-01.",
+)
+@click.option(
+    "--end-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=lambda: datetime.now(timezone.utc).date().isoformat(),
+    help="End date for photo sync (YYYY-MM-DD). Default is today.",
+)
+@click.option(
+    "--log-console/--no-log-console",
+    default=False,
+    help="Enable/disable console logging. Default is disabled.",
+)
+@click.option(
+    "--log-file/--no-log-file",
+    default=False,
+    help="Enable/disable file logging. Default is disabled.",
+)
+@click.option(
+    "--log-level",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], case_sensitive=False
+    ),
+    default="INFO",
+    help="Set the logging level. Default is INFO.",
+)
+def main(backup_dir, start_date, end_date, log_console, log_file, log_level):
+    """
+    Sync and organize photos from Google Photos to local storage.
+    """
+    # Set up logging based on CLI options
+    global logger
+    logger = setup_logging(log_console, log_file, log_level)
 
-# Global flag for interruption
-interrupted = False
+    logger.info(f"Starting photo sync from {start_date} to {end_date}")
+    logger.info(f"Backup directory: {backup_dir}")
 
+    # Ensure the backup directory exists
+    os.makedirs(backup_dir, exist_ok=True)
 
-def signal_handler(signum, frame):
-    global interrupted
-    interrupted = True
-    logger.warning(
-        "Interruption signal received. Finishing current operation and exiting..."
-    )
+    # Database file path
+    db_file = os.path.join(backup_dir, "photo_sync.db")
 
-
-signal.signal(signal.SIGINT, signal_handler)
+    try:
+        sync_photos(backup_dir, start_date, end_date, db_file)
+        organize_photos(backup_dir, db_file)
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred: {str(e)}")
 
 
 # Set up credentials
@@ -638,15 +714,4 @@ def organize_photos(download_dir, db_file):
 
 
 if __name__ == "__main__":
-    download_dir = "/home/vivek/gphotos-backup"
-    db_file = "photo_sync.db"
-    start_date = datetime.now() - timedelta(days=365)
-    end_date = datetime.now()  # Today
-    start_date = datetime(2010, 1, 1)
-    end_date = datetime(2016, 1, 2)
-
-    try:
-        sync_photos(download_dir, start_date, end_date, db_file)
-        organize_photos(download_dir, db_file)
-    except Exception as e:
-        logger.exception(f"An unexpected error occurred: {str(e)}")
+    main()
