@@ -105,12 +105,21 @@ def setup_logging(log_console, log_file, log_level):
     return logger
 
 
+# Pre-compute the help text
+def get_default_backup_dir():
+    return os.path.join(os.path.expanduser("~"), "gphoto-backup")
+
+
+default_dir = get_default_backup_dir()
+backup_dir_help = f"Directory to store downloaded photos. Default is {default_dir}"
+
+
 @click.command()
 @click.option(
     "--backup-dir",
     type=click.Path(file_okay=False, dir_okay=True, writable=True),
-    default=lambda: os.path.join(os.path.expanduser("~"), "gphoto-backup"),
-    help="Directory to store downloaded photos. Default is ~/gphoto-backup/",
+    default=get_default_backup_dir,
+    help=backup_dir_help,
 )
 @click.option(
     "--start-date",
