@@ -376,11 +376,17 @@ def sync_photos(download_dir, start_date, end_date, db_file):
                 for item in items:
                     if interrupted:
                         break
-                    # Download the photo and store it locally
-                    download_photo(item, download_dir, cursor)
-                    # Associate the item with its albums in the database
-                    for album_id in media_item_to_albums.get(item["id"], []):
-                        add_item_to_album(cursor, album_id, item["id"])
+                    try:
+                        # Download the photo and store it locally
+                        download_photo(item, download_dir, cursor)
+                        # Associate the item with its albums in the database
+                        for album_id in media_item_to_albums.get(item["id"], []):
+                            add_item_to_album(cursor, album_id, item["id"])
+                    except Exception as e:
+                        logger.error(
+                            f"Error processing item {item.get('id', 'unknown')}: {str(e)}"
+                        )
+                        continue
 
                 conn.commit()
 
@@ -636,8 +642,8 @@ if __name__ == "__main__":
     db_file = "photo_sync.db"
     start_date = datetime.now() - timedelta(days=365)
     end_date = datetime.now()  # Today
-    start_date = datetime(2021, 12, 1)
-    end_date = datetime(2022, 1, 1)
+    start_date = datetime(2010, 1, 1)
+    end_date = datetime(2016, 1, 2)
 
     try:
         sync_photos(download_dir, start_date, end_date, db_file)
