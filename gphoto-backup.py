@@ -20,7 +20,7 @@ from google.oauth2.credentials import Credentials
 import google.auth.transport.requests
 import requests
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
 import json
 import sqlite3
 import logging
@@ -59,6 +59,15 @@ def signal_handler(signum, frame):
 
 # Set up signal handler
 signal.signal(signal.SIGINT, signal_handler)
+
+
+def check_internet_connection():
+    """Check if there's an active internet connection."""
+    try:
+        requests.get("https://www.google.com", timeout=5)
+        return True
+    except requests.ConnectionError:
+        return False
 
 
 def setup_logging(log_console, log_file, log_level):
@@ -246,8 +255,21 @@ def init_database(db_file):
     """
     )
 
+    init_sync_state(cursor)
+
     conn.commit()
     return conn
+
+
+def init_sync_state(cursor):
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """
+    )
 
 
 @retry(
@@ -389,29 +411,8 @@ def download_photo(item, download_dir, cursor):
 def sync_photos(download_dir, start_date, end_date, db_file):
     """
     Synchronizes photos from Google Photos to a local directory within a specified date range.
-
-    This function performs the following operations:
-    1. Fetches and stores all albums and their media items.
-    2. Retrieves media items within the specified date range.
-    3. Downloads each media item and stores it locally.
-    4. Associates downloaded items with their respective albums in the database.
-
-    The function handles pagination and can be interrupted safely.
-
-    Args:
-    download_dir (str): Path to the directory where photos will be downloaded.
-    start_date (datetime): The start date of the range to sync.
-    end_date (datetime): The end date of the range to sync.
-    db_file (str): Path to the SQLite database file for storing metadata.
-
-    Global Variables Used:
-    interrupted (bool): Flag to signal if the sync process should be interrupted.
-
-    Note:
-    This function may take a considerable amount of time to execute depending on the
-    number of photos in the specified date range and the network speed.
+    This improved version includes better error handling, connection checks, and a resume feature.
     """
-    # Initialize credentials and database connection
     creds = get_credentials()
     session = google.auth.transport.requests.AuthorizedSession(creds)
     conn = init_database(db_file)
@@ -449,9 +450,22 @@ def sync_photos(download_dir, start_date, end_date, db_file):
             },
         }
 
+        # Retrieve the last processed page token from the database
+        cursor.execute("SELECT value FROM sync_state WHERE key = 'last_page_token'")
+        result = cursor.fetchone()
+        if result:
+            body["pageToken"] = result[0]
+            logger.info(f"Resuming sync from page token: {body['pageToken']}")
+
         # Main loop for fetching and downloading media items
         while not interrupted:
             try:
+                # Check internet connection before making API request
+                if not check_internet_connection():
+                    logger.warning("No internet connection. Retrying in 60 seconds...")
+                    time.sleep(60)
+                    continue
+
                 # Make API request to get media items
                 response = make_api_request(session, url, method="post", json=body)
                 data = response.json()
@@ -473,19 +487,28 @@ def sync_photos(download_dir, start_date, end_date, db_file):
                         )
                         continue
 
-                conn.commit()
-
-                # Check for more pages of results
+                # Update the last processed page token in the database
                 if "nextPageToken" in data:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
+                        ("last_page_token", data["nextPageToken"]),
+                    )
                     body["pageToken"] = data["nextPageToken"]
                 else:
+                    cursor.execute(
+                        "DELETE FROM sync_state WHERE key = 'last_page_token'"
+                    )
                     break  # No more pages, exit the loop
+
+                conn.commit()
 
             except requests.exceptions.RequestException as e:
                 logger.error(f"Error in API request: {str(e)}")
-                if "pageToken" in body:
-                    del body["pageToken"]  # Reset page token on error
+                logger.info("Retrying in 60 seconds...")
+                time.sleep(60)
 
+    except Exception as e:
+        logger.exception(f"Unexpected error in sync_photos: {str(e)}")
     finally:
         # Ensure database connection is closed
         conn.close()
