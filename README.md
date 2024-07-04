@@ -2,6 +2,10 @@
 
 This script provides a simple way to back up your Google Photos library to your local machine. It organizes photos by date and maintains album structures using symlinks.
 
+## Use Case
+
+This is meant as a local last-resort backup in case you lose access to your Google account through carelessness, malice or displeasing the Borg. There's also a [companion script for backing up your Google Drive](https://github.com/bhatiavivek/gdrive-backup).
+
 ## Features
 
 - Downloads photos from Google Photos to your local machine
@@ -21,7 +25,7 @@ Before you can use this script, you need to:
 4. Enable the Photos Library API for your project
 5. Create credentials (OAuth client ID) for a desktop application
 6. Download the client configuration and save it as `client_secret.json` in the same directory as the script
-7. **For the time being, this is Linux-only. It should work on the Mac although it hasn't been tested. Windows support is ccoming, likely before the end of June 2024**
+7. **For the time being, this is Linux-only. It should work on the Mac although it hasn't been tested. Windows support is ccoming, likely by 6th July 2024**
 
 ## Installation
 
